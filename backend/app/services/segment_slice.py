@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.services.base import BaseModuleService
+from app.services.controlled_slice import controlled_slice_service
 from app.store import store
 
 
@@ -21,6 +22,44 @@ class SegmentSliceService(BaseModuleService):
     STATUS_ORDER = ["待计算", "已计算", "计算失败"]
     ACTION_RULES = {"开始计算": "已计算", "重试计算": "计算失败"}
     NEGATIVE_ACTIONS = []
+
+    def run_action(
+        self,
+        entry_id: int,
+        action: str,
+        values: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any] | None, str]:
+        values = values or {}
+        entry = store.find(self.MODULE, entry_id)
+        if entry is None:
+            return None, f"{self.ENTITY} {entry_id} 不存在或已归档"
+
+        if action in {"确认切片", "确认结果", "确认切片结果"}:
+            return controlled_slice_service.confirm_slice(entry_id, values)
+
+        if action in {"历史凭证复查", "按原成员数复算", "复算", "历史复查"}:
+            credential_no = str(entry.get("credential_no") or entry.get("历史凭证") or values.get("credential_no") or "")
+            result = controlled_slice_service.recompute_credential(credential_no)
+            if result.get("ok"):
+                entry["last_recompute"] = {
+                    "consistent": result.get("consistent"),
+                    "original_member_count": result.get("original_member_count"),
+                    "recomputed_member_count": result.get("recomputed_member_count"),
+                    "recomputed_hash": result.get("recomputed_hash"),
+                }
+                return entry, str(result["message"])
+            return None, str(result["message"])
+
+        if entry.get("history_locked"):
+            return None, "该切片已有历史凭证并锁定；请按原成员快照复查，不能直接改写"
+
+        ticket_no = str(entry.get("ticket_no") or values.get("ticket_no") or "").strip()
+        if action == "开始计算" and ticket_no:
+            result = controlled_slice_service.compute_ticket(ticket_no, values)
+            refreshed = store.find(self.MODULE, entry_id)
+            return (refreshed if result.get("ok") else None), str(result["message"])
+
+        return super().run_action(entry_id, action, values)
 
     # ---- 业务扩展：维度切片与差异计算 ----
 

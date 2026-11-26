@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.controlled_seed import install_controlled_seed
+
 SEED_ROWS: dict[str, list[dict[str, Any]]] = {
     "event_stream": [{'id': 1,
   'status': '待验证',
@@ -545,3 +547,7 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '刷新策略': '指标查询服务样例3',
   '调用限额': '指标查询服务样例3'}]
 }
+
+# 安装 C10 受控切片、授权记录、成员工单和历史凭证等确定性场景数据。
+install_controlled_seed(SEED_ROWS)
+

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.services.base import BaseModuleService
+from app.services.controlled_slice import controlled_slice_service
 from app.store import store
 
 
@@ -19,8 +20,68 @@ class CohortBuilderService(BaseModuleService):
     LIST_FIELDS = ["人群编码", "人群名称", "圈选条件", "人群规模", "刷新周期"]
     REQUIRED_FIELDS = ["人群编码", "人群名称", "圈选条件"]
     STATUS_ORDER = ["草稿", "已生成", "已过期"]
-    ACTION_RULES = {"生成人群": "已生成", "标记过期": "已过期"}
+    ACTION_RULES = {
+        "共享申请": "待授权",
+        "授予切片领用资格": "有效",
+        "撤回授权": "已撤回",
+        "生成人群": "已生成",
+        "标记过期": "已过期",
+    }
     NEGATIVE_ACTIONS = []
+
+    # ---- 受控共享：申请、授权、撤回、详情聚合 ----
+
+    def run_action(
+        self,
+        entry_id: int,
+        action: str,
+        values: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any] | None, str]:
+        values = values or {}
+        entry = store.find(self.MODULE, entry_id)
+        if entry is None:
+            return None, f"{self.ENTITY} {entry_id} 不存在或已归档"
+
+        if action == "共享申请":
+            result = controlled_slice_service.create_share_request(entry, values)
+            return (entry if result.get("ok") else None), str(result["message"])
+        if action == "授予切片领用资格":
+            result = controlled_slice_service.grant_eligibility(entry, values)
+            return (entry if result.get("ok") else None), str(result["message"])
+        if action == "撤回授权":
+            grant_no = str(values.get("grant_no") or values.get("授权凭证") or "").strip()
+            if not grant_no:
+                recipient = str(values.get("接收者") or values.get("recipient") or "").strip()
+                candidates = [
+                    g for g in store.rows("cohort_grant")
+                    if g.get("人群编码") == entry.get("人群编码")
+                    and (not recipient or g.get("接收者") == recipient)
+                ]
+                active = [g for g in candidates if g.get("status") == "有效"]
+                target_grant = (active or candidates)[-1] if (active or candidates) else None
+                grant_no = str((target_grant or {}).get("grant_no", ""))
+            result = controlled_slice_service.revoke_grant(grant_no, values)
+            return (entry if result.get("ok") else None), str(result["message"])
+        if action in {"核对包归属", "核对归属与接收者"}:
+            detail = controlled_slice_service.cohort_detail(cohort_id=entry_id)
+            if not detail.get("ok"):
+                return None, str(detail["message"])
+            entry["ownership_checked_at"] = datetime.now(timezone.utc).isoformat()
+            return entry, "已核对人群包归属、来源实验和接收者授权记录"
+
+        return super().run_action(entry_id, action, values)
+
+    def controlled_detail(self, entry_id: int) -> dict[str, Any]:
+        return controlled_slice_service.cohort_detail(cohort_id=entry_id)
+
+    def create_entry(self, values: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
+        # 人群编码是业务幂等键；测试或页面重复提交 C10 时不要制造第二个同名包。
+        code = str(values.get("人群编码") or "").strip()
+        if code:
+            existing = next((r for r in store.rows(self.MODULE) if str(r.get("人群编码", "")) == code), None)
+            if existing is not None:
+                return existing, []
+        return super().create_entry(values)
 
     # ---- 业务扩展：人群圈选与规模计算 ----
 

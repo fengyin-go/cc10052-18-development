@@ -82,17 +82,34 @@ def get_entry(module: str, entry_id: int) -> dict[str, Any]:
     return entry
 
 
+@router.get("/{module}/{entry_id}/detail")
+def get_entry_detail(module: str, entry_id: int) -> dict[str, Any]:
+    service = require_service(module)
+    if hasattr(service, "controlled_detail"):
+        result = service.controlled_detail(entry_id)
+        if not result.get("ok", True):
+            raise HTTPException(status_code=404, detail=result.get("message"))
+        return result
+    entry = service.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"{service.ENTITY} {entry_id} 不存在或已归档")
+    return {"ok": True, "entry": entry}
+
+
 @router.post("/{module}", response_model=ActionResult)
 def create_entry(module: str, payload: EntryPayload) -> ActionResult:
     service = require_service(module)
-    entry, missing = service.create_entry(payload.values)
+    entry, missing = service.create_entry(payload.merged_values())
     if missing:
         return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
     return ActionResult(ok=True, message=f"{service.ENTITY}已登记", entry=entry)
 
 
 @router.post("/{module}/{entry_id}/actions", response_model=ActionResult)
-def run_action(module: str, entry_id: int, payload: ActionPayload) -> ActionResult:
+async def run_action(module: str, entry_id: int, payload: ActionPayload, request: Request) -> ActionResult:
     service = require_service(module)
-    entry, message = service.run_action(entry_id, payload.action.strip())
+    values = payload.merged_values()
+    for key, value in request.query_params.items():
+        values.setdefault(key, value)
+    entry, message = service.run_action(entry_id, payload.action.strip(), values)
     return ActionResult(ok=entry is not None, message=message, entry=entry)

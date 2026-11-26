@@ -1,5 +1,5 @@
 <template>
-  <section class="page" :data-module="meta.key">
+  <section class="page" :data-module="meta.key" :inert="cohortDetailId !== null">
     <header class="page-head">
       <div>
         <h2>{{ meta.name }}</h2>
@@ -14,6 +14,8 @@
         </button>
       </div>
     </header>
+
+    <AuthorizedSliceWorkspace v-if="meta.key === 'segment_slice'" @changed="reload" />
 
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
@@ -51,10 +53,39 @@
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
+              v-if="meta.key === 'cohort_builder'"
+              class="link"
+              type="button"
+              :data-testid="`cohort-detail-${row.id}`"
+              @click="openCohortDetail(Number(row.id))"
+            >
+              人群详情
+            </button>
+            <button
+              v-if="meta.key === 'segment_slice' && row.历史凭证"
+              class="link"
+              type="button"
+              :data-testid="`credential-${row.id}`"
+              @click="reviewCredential(String(row.历史凭证))"
+            >
+              历史凭证复查
+            </button>
+            <button
+              v-if="meta.key === 'segment_slice' && row.status === '已计算'"
+              class="link"
+              type="button"
+              :data-testid="`action-${row.id}-确认切片`"
+              @click="runAction('确认切片', row)"
+            >
+              确认切片结果
+            </button>
+            <button
               v-for="action in meta.actions"
               :key="action"
               class="link"
               type="button"
+              :disabled="Boolean(row.history_locked)"
+              :title="row.history_locked ? '历史凭证已锁定，请在下方凭证面板复查' : ''"
               :data-testid="`action-${row.id}-${action}`"
               @click="runAction(action, row)"
             >
@@ -86,6 +117,14 @@
       </form>
     </div>
 
+    <CohortDetailModal
+      v-if="cohortDetailId !== null"
+      :cohort-id="cohortDetailId"
+      :initial-panel="cohortDetailPanel"
+      @close="cohortDetailId = null"
+      @changed="reload"
+    />
+
     <footer class="page-foot">
       <span>共 {{ total }} 条{{ meta.name }}记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
@@ -95,6 +134,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import {
   createEntry,
@@ -104,8 +144,11 @@ import {
   runAction as applyAction,
 } from '@/api/backend-service'
 import type { EntryRow } from '@/data/types'
+import AuthorizedSliceWorkspace from '@/components/AuthorizedSliceWorkspace.vue'
+import CohortDetailModal from '@/components/CohortDetailModal.vue'
 
 const props = defineProps<{ moduleKey: string }>()
+const router = useRouter()
 const meta = moduleMeta(props.moduleKey)
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
@@ -115,6 +158,8 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+const cohortDetailId = ref<number | null>(null)
+const cohortDetailPanel = ref<'share' | 'grant' | null>(null)
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
   { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
@@ -150,6 +195,16 @@ function openCreate() {
   showCreate.value = true
 }
 
+function openCohortDetail(id: number, panel: 'share' | 'grant' | null = null) {
+  cohortDetailId.value = id
+  cohortDetailPanel.value = panel
+  errorMessage.value = ''
+}
+
+function reviewCredential(credential: string) {
+  void router.push({ path: `/${meta.key}`, query: { credential } })
+}
+
 async function submitCreate() {
   creating.value = true
   errorMessage.value = ''
@@ -167,6 +222,14 @@ async function submitCreate() {
 
 async function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
+  if (meta.key === 'cohort_builder' && action === '共享申请') {
+    openCohortDetail(Number(row.id), 'share')
+    return
+  }
+  if (meta.key === 'cohort_builder' && action === '授予切片领用资格') {
+    openCohortDetail(Number(row.id), 'grant')
+    return
+  }
   try {
     const result = await applyAction(meta.key, Number(row.id), action)
     if (!result.ok) throw new Error(result.message)

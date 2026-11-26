@@ -1,6 +1,6 @@
-"""业务路由汇总：所有模块共用一套资源路由，由领域服务完成分派。"""
+"""路由汇总：受控切片专用接口先注册，随后是通用资源路由。"""
 from __future__ import annotations
 
-from app.routers import resource
+from app.routers import controlled_slice, resource
 
-ROUTERS = [resource]
+ROUTERS = [controlled_slice, resource]

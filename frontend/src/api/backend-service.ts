@@ -8,7 +8,7 @@ export async function listEntries(
   key: string,
   filters: Record<string, string> = {},
 ): Promise<PageResult> {
-  const query = new URLSearchParams(filters).toString()
+  const query = new URLSearchParams({ size: '200', ...filters }).toString()
   const response = await request(`/api/${key}?${query}`)
   if (!response.ok) throw new Error('业务数据读取失败')
   return await response.json()
